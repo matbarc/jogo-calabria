@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: jogo-investimento
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: TEACHER_PASSWORD
+        sync: false

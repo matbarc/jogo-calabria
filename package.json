@@ -1,0 +1,22 @@
+{
+  "name": "jogo-investimento",
+  "version": "1.0.0",
+  "description": "Jogo de Investimento ao vivo (IEE Impacto, Aula 5)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/simulate.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.22.3",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
