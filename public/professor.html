@@ -122,6 +122,11 @@
   .drawer .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .drawer .btn { width: 100%; margin-top: 8px; font-size: 15px; padding: 11px; }
   .drawer .note { color: var(--muted); font-size: 13px; margin: -6px 0 12px; }
+  .drawer { max-height: calc(100vh - 110px); overflow: auto; }
+  .dteams { display: grid; gap: 6px; max-height: 220px; overflow: auto; padding-right: 4px; }
+  .dteam { display: grid; grid-template-columns: 1fr 90px; gap: 8px; align-items: center; font-weight: 700; color: var(--navy); }
+  .dteam span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0 !important; color: var(--navy) !important; font-size: 15px !important; }
+  .dteam input { padding: 6px 10px !important; font-size: 16px !important; text-align: right; }
 
   @media (max-width: 1000px) {
     .lobby, .reveal, .final { grid-template-columns: 1fr; }

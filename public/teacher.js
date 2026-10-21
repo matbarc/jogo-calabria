@@ -86,29 +86,40 @@
   }
   const joinUrl = () => `${origin}/?code=${S.code}`;
 
+  // A tela é montada uma vez e depois só as partes que mudaram são trocadas.
+  // Assim campos em edição e botões não são recriados quando um aluno entra ou mexe na carteira.
+  let shellReady = false;
+  const lastHtml = {};
+  function ensureShell() {
+    if (shellReady && $('#stage')) return;
+    app.innerHTML = `<div class="head" id="head"></div>
+      <div class="stage" id="stage" style="position:relative"></div>
+      <div class="foot" id="foot"></div>
+      <div id="drawerHost"></div>`;
+    shellReady = true;
+    for (const k in lastHtml) delete lastHtml[k];
+  }
+  function setHTML(id, html) {
+    if (lastHtml[id] === html) return false;
+    $('#' + id).innerHTML = html;
+    lastHtml[id] = html;
+    return true;
+  }
+
   function render() {
     if (!S) return;
-    // preserva foco/valor de inputs durante re-render
-    const ae = document.activeElement;
-    const focusKey = ae && ae.dataset && ae.dataset.fk;
-    const focusVal = focusKey ? ae.value : null;
-
-    const dark = S.phase === 'decide';
-    app.innerHTML = `
-      <div class="head">
-        <div class="brand"><b>Jogo de Investimento</b> · IEE Impacto · Aula 5</div>
-        ${S.phase !== 'lobby' && S.phase !== 'final' ? `<div class="joinpill">Entrar: ${esc(host)} <span class="code num">${S.code}</span></div>` : `<div class="joinpill">Sala <span class="code num">${S.code}</span></div>`}
-      </div>
-      <div class="stage ${dark ? 'dark' : ''}" style="position:relative" id="stage">${stage()}</div>
-      <div class="foot">${foot()}</div>
-      ${drawerOpen ? drawer() : ''}`;
-    wire();
-    if (focusKey) {
-      const el = app.querySelector(`[data-fk="${focusKey}"]`);
-      if (el) { el.value = focusVal; el.focus(); }
-    }
+    ensureShell();
+    setHTML('head', `
+      <div class="brand"><b>Jogo de Investimento</b> · IEE Impacto · Aula 5</div>
+      ${S.phase !== 'lobby' && S.phase !== 'final' ? `<div class="joinpill">Entrar: ${esc(host)} <span class="code num">${S.code}</span></div>` : `<div class="joinpill">Sala <span class="code num">${S.code}</span></div>`}`);
+    $('#stage').classList.toggle('dark', S.phase === 'decide');
+    const stageChanged = setHTML('stage', stage());
+    if (S.phase === 'lobby') patchTeams();
+    if (S.phase === 'final' && stageChanged) drawFinalChart();
+    setHTML('foot', foot());
+    const st = $('#fstatus'); if (st) st.textContent = footStatus();
+    if (drawerOpen && drawerPhase !== phaseKey()) closeDrawer();
     tick();
-    if (S.phase === 'final') drawFinalChart();
   }
 
   function stage() {
@@ -124,7 +135,6 @@
   // ---- lobby
   function lobby() {
     const url = joinUrl();
-    const teams = S.teams;
     return `<div class="lobby">
       <div class="joinbig anim-up">
         <div class="eyebrow">Entre pelo celular</div>
@@ -135,19 +145,54 @@
         <img src="/qr.svg?u=${encodeURIComponent(url)}" alt="QR code para entrar no jogo">
       </div>
       <div class="teams">
-        <h2>${teams.length} ${teams.length === 1 ? 'time' : 'times'}</h2>
-        <div class="hint">Lance as notinhas do Kahoot de cada time (1 tampinha = ${brl(S.settings.rateIn, S.settings.rateIn % 1 !== 0)} no caixa). Pode corrigir até a Rodada 1 ser revelada.</div>
-        ${teams.length ? `<div class="tlist">
-          <div class="trow headrow"><span>Time</span><span style="text-align:right">Tampinhas</span><span style="text-align:right">Caixa inicial</span><span></span></div>
-          ${teams.map(t => `<div class="trow anim-pop">
-            <span class="nm"><i class="dot ${t.connected ? '' : 'off'}" title="${t.connected ? 'conectado' : 'desconectado'}"></i><span>${esc(t.name)}</span></span>
-            <input class="num" inputmode="numeric" data-fk="tp-${t.id}" data-team="${t.id}" value="${t.tampinhas}" aria-label="Tampinhas de ${esc(t.name)}">
-            <span class="num" style="text-align:right;font-weight:800">${brl(t.startCash)}</span>
-            <button class="x" data-kick="${t.id}" title="Remover time" aria-label="Remover ${esc(t.name)}">×</button>
-          </div>`).join('')}
-        </div>` : `<div class="empty">Aguardando o primeiro time entrar…</div>`}
+        <h2 id="tcount"></h2>
+        <div class="hint">Digite as tampinhas do Kahoot de cada time (1 tampinha = ${brl(S.settings.rateIn, S.settings.rateIn % 1 !== 0)} no caixa) e aperte Enter. Dá para corrigir até a Rodada 1 ser revelada, em ⚙ Ajustes.</div>
+        <div class="trow headrow"><span>Time</span><span style="text-align:right">Tampinhas</span><span style="text-align:right">Caixa inicial</span><span></span></div>
+        <div class="tlist" id="tlist"></div>
+        <div class="empty" id="tempty">Aguardando o primeiro time entrar…</div>
       </div>
     </div>`;
+  }
+
+  // linhas dos times: criadas uma vez por time e só atualizadas depois
+  function patchTeams() {
+    const list = $('#tlist');
+    if (!list) return;
+    const ids = new Set(S.teams.map(t => t.id));
+    for (const row of [...list.children]) if (!ids.has(row.dataset.id)) row.remove();
+    S.teams.forEach((t, i) => {
+      let row = list.querySelector(`[data-id="${t.id}"]`);
+      if (!row) {
+        row = document.createElement('div');
+        row.className = 'trow anim-pop';
+        row.dataset.id = t.id;
+        row.innerHTML = `<span class="nm"><i class="dot"></i><span class="tn"></span></span>
+          <input class="num" inputmode="numeric" data-team="${t.id}" value="${t.tampinhas}">
+          <span class="num cash" style="text-align:right;font-weight:800"></span>
+          <button class="x" data-kick="${t.id}" title="Remover time">×</button>`;
+      }
+      if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null);
+      row.querySelector('.dot').classList.toggle('off', !t.connected);
+      row.querySelector('.tn').textContent = t.name;
+      row.querySelector('.cash').textContent = brl(t.startCash);
+      const inp = row.querySelector('input');
+      inp.setAttribute('aria-label', 'Tampinhas de ' + t.name);
+      if (document.activeElement !== inp && !tpTimers[t.id]) inp.value = t.tampinhas;
+    });
+    $('#tcount').textContent = `${S.teams.length} ${S.teams.length === 1 ? 'time' : 'times'}`;
+    $('#tempty').classList.toggle('hidden', S.teams.length > 0);
+  }
+
+  function sendTampinhas(inp) {
+    const id = inp.dataset.team;
+    clearTimeout(tpTimers[id]);
+    const value = Number(String(inp.value).replace(/\D/g, '')) || 0;
+    tpTimers[id] = 'sending';
+    act('tampinhas', { teamId: id, value }, res => {
+      delete tpTimers[id];
+      if (!res.ok) { const t = S && S.teams.find(x => x.id === id); if (t) inp.value = t.tampinhas; }
+      render();
+    });
   }
 
   // ---- decide
@@ -272,61 +317,106 @@
     return null;
   }
 
+  function footStatus() {
+    if (S.phase === 'decide') return `${S.teams.filter(t => t.ready).length}/${S.teams.length} confirmaram`;
+    if (S.phase === 'lobby') return `${S.teams.length} ${S.teams.length === 1 ? 'time' : 'times'} conectados`;
+    if (S.phase === 'reveal') return `Rodada ${S.round.n} de ${S.round.total}`;
+    return '';
+  }
+
   function foot() {
     const p = primary();
     const timerCtl = S.phase === 'decide' ? `
       <div class="clock num" id="clock">–</div>
-      <button class="btn ghost" data-a="timerToggle" id="ttoggle">${S.timer.running ? 'Pausar' : 'Iniciar'}</button>
+      <button class="btn ghost" data-a="timerToggle" id="ttoggle">Pausar</button>
       <button class="btn ghost" data-a="timerAdd">+30 s</button>` : '';
-    let status = '';
-    if (S.phase === 'decide') status = `${S.teams.filter(t => t.ready).length}/${S.teams.length} confirmaram`;
-    else if (S.phase === 'lobby') status = `${S.teams.length} ${S.teams.length === 1 ? 'time' : 'times'} conectados`;
-    else if (S.phase === 'reveal') status = `Rodada ${S.round.n} de ${S.round.total}`;
     return `
       <button class="btn ghost" data-a="settings" title="Ajustes">⚙ Ajustes</button>
       <button class="btn ghost" data-a="undo" ${S.canUndo ? '' : 'disabled'} title="Desfaz a última passagem de fase">↶ Voltar</button>
       ${timerCtl}
-      <span class="status">${status}</span>
+      <span class="status" id="fstatus"></span>
       <span class="spacer"></span>
       ${p ? `<span class="kbd">→ ou espaço</span><button class="btn primary" data-a="primary" ${p.disabled ? 'disabled' : ''}>${p.label}</button>` : ''}`;
   }
 
-  function drawer() {
+  // ---- ajustes: montado só ao abrir, não é redesenhado pelas atualizações
+  let drawerPhase = '';
+  const phaseKey = () => S.phase + ':' + (S.round ? S.round.n : 0);
+  const canChangeStart = () => S.phase === 'lobby' || (S.phase === 'decide' && S.round.n === 1);
+  const fmtNum = v => String(v).replace('.', ',');
+
+  function openDrawer() {
     const s = S.settings;
-    const early = S.phase === 'lobby' || (S.phase === 'decide' && S.round.n === 1);
-    return `<div class="drawer anim-up">
+    const early = canChangeStart();
+    drawerOpen = true;
+    drawerPhase = phaseKey();
+    $('#drawerHost').innerHTML = `<div class="drawer anim-up">
       <h3>Ajustes</h3>
-      <label class="field"><span>Tempo por rodada (segundos, 0 = sem cronômetro)</span><input class="num" data-fk="set-sec" id="sec" inputmode="numeric" value="${s.decideSeconds}"></label>
+      <label class="field"><span>Tempo por rodada (segundos, 0 = sem cronômetro)</span><input class="num" id="sec" inputmode="numeric" value="${s.decideSeconds}"></label>
+      ${S.phase === 'decide' ? '<p class="note">Ao salvar, o cronômetro desta rodada recomeça com o novo tempo.</p>' : ''}
+      ${early && S.teams.length ? `<div class="field"><span>Tampinhas do Kahoot por time</span>
+        <div class="dteams">${S.teams.map(t => `<label class="dteam"><span>${esc(t.name)}</span><input class="num" inputmode="numeric" data-dteam="${t.id}" data-orig="${t.tampinhas}" value="${t.tampinhas}"></label>`).join('')}</div></div>` : ''}
       <div class="row2">
-        <label class="field"><span>R$ por tampinha (entrada)</span><input class="num" data-fk="set-in" id="rin" inputmode="decimal" value="${String(s.rateIn).replace('.', ',')}" ${early ? '' : 'disabled'}></label>
-        <label class="field"><span>Tampinhas por R$ (saída)</span><input class="num" data-fk="set-out" id="rout" inputmode="decimal" value="${String(s.rateOut).replace('.', ',')}"></label>
+        <label class="field"><span>R$ por tampinha (entrada)</span><input class="num" id="rin" inputmode="decimal" value="${fmtNum(s.rateIn)}" ${early ? '' : 'disabled'}></label>
+        <label class="field"><span>Tampinhas por R$ (saída)</span><input class="num" id="rout" inputmode="decimal" value="${fmtNum(s.rateOut)}"></label>
       </div>
-      <p class="note">Iguais às células O2 e P2 da planilha. Padrão: 1 e 0,2.</p>
+      <p class="note">${early ? 'Câmbios iguais às células O2 e P2 da planilha. Padrão: 1 e 0,2.' : 'As tampinhas iniciais e o câmbio de entrada só mudam até a Rodada 1 ser revelada.'}</p>
       <button class="btn" data-a="saveSettings">Salvar ajustes</button>
       <button class="btn ghost" data-a="restart">Recomeçar do zero (mesmos times)</button>
       <button class="btn ghost" data-a="exit">Trocar de jogo</button>
     </div>`;
+    const first = $('#sec'); if (first) first.focus();
+  }
+  function closeDrawer() { drawerOpen = false; drawerPhase = ''; const h = $('#drawerHost'); if (h) h.innerHTML = ''; }
+
+  async function saveSettings() {
+    const num = v => Number(String(v).replace(',', '.'));
+    const call = (type, extra) => new Promise(r => socket.emit('teacher:action', { code, type, ...extra }, r));
+    const errors = [];
+    const rin = $('#rin');
+    let res = await call('settings', { decideSeconds: num($('#sec').value), rateIn: rin.disabled ? undefined : num(rin.value), rateOut: num($('#rout').value) });
+    if (!res.ok) errors.push(res.error);
+    for (const inp of document.querySelectorAll('[data-dteam]')) {
+      const v = Number(inp.value.replace(/\D/g, '')) || 0;
+      if (String(v) === inp.dataset.orig) continue;
+      res = await call('tampinhas', { teamId: inp.dataset.dteam, value: v });
+      if (!res.ok) errors.push(res.error);
+    }
+    if (errors.length) U.toast(errors[0]);
+    else { closeDrawer(); U.toast('Ajustes salvos.'); }
   }
 
-  function wire() {
-    app.querySelectorAll('[data-a]').forEach(b => (b.onclick = () => onAction(b.dataset.a)));
-    app.querySelectorAll('[data-team]').forEach(inp => {
-      const send = () => {
-        clearTimeout(tpTimers[inp.dataset.team]);
-        act('tampinhas', { teamId: inp.dataset.team, value: Number(inp.value.replace(/\D/g, '')) || 0 });
-      };
-      inp.oninput = () => { clearTimeout(tpTimers[inp.dataset.team]); tpTimers[inp.dataset.team] = setTimeout(send, 700); };
-      inp.onkeydown = e => { if (e.key === 'Enter') { send(); inp.blur(); } };
-    });
-    app.querySelectorAll('[data-kick]').forEach(b => (b.onclick = () => {
-      const t = S.teams.find(x => x.id === b.dataset.kick);
+  // cliques e digitação tratados por delegação (os elementos podem ser trocados)
+  app.addEventListener('click', e => {
+    const a = e.target.closest('[data-a]');
+    if (a && !a.disabled) return onAction(a.dataset.a);
+    const k = e.target.closest('[data-kick]');
+    if (k) {
+      const t = S && S.teams.find(x => x.id === k.dataset.kick);
       if (t && confirm(`Remover o time "${t.name}"?`)) act('kick', { teamId: t.id });
-    }));
-    app.querySelectorAll('[data-tab]').forEach(b => (b.onclick = () => { finalTab = b.dataset.tab; render(); }));
-  }
+      return;
+    }
+    const tab = e.target.closest('[data-tab]');
+    if (tab) { finalTab = tab.dataset.tab; render(); }
+  });
+  app.addEventListener('input', e => {
+    const inp = e.target.closest('[data-team]');
+    if (!inp) return;
+    clearTimeout(tpTimers[inp.dataset.team]);
+    tpTimers[inp.dataset.team] = setTimeout(() => sendTampinhas(inp), 900);
+  });
+  app.addEventListener('focusout', e => {
+    const inp = e.target.closest('[data-team]');
+    if (inp && tpTimers[inp.dataset.team] && tpTimers[inp.dataset.team] !== 'sending') sendTampinhas(inp);
+  });
+  app.addEventListener('keydown', e => {
+    const inp = e.target.closest('[data-team]');
+    if (inp && e.key === 'Enter') { e.preventDefault(); sendTampinhas(inp); inp.blur(); return; }
+    if (e.target.closest('.drawer') && e.key === 'Enter' && e.target.matches('input')) { e.preventDefault(); saveSettings(); }
+    if (e.target.closest('.drawer') && e.key === 'Escape') closeDrawer();
+  });
 
   function onAction(a) {
-    const num = v => Number(String(v).replace(',', '.'));
     switch (a) {
       case 'primary': {
         const p = primary();
@@ -339,24 +429,22 @@
         if (confirm('Voltar para a etapa anterior? As carteiras voltam a como estavam antes.')) act('undo');
         return;
       case 'timerToggle': case 'timerAdd': act(a, { seconds: 30 }); return;
-      case 'settings': drawerOpen = !drawerOpen; render(); return;
-      case 'saveSettings':
-        act('settings', { decideSeconds: num($('#sec').value), rateIn: $('#rin').disabled ? undefined : num($('#rin').value), rateOut: num($('#rout').value) }, res => {
-          if (res.ok) { drawerOpen = false; U.toast('Ajustes salvos.'); render(); }
-        });
-        return;
+      case 'settings': drawerOpen ? closeDrawer() : openDrawer(); return;
+      case 'saveSettings': saveSettings(); return;
       case 'restart':
-        if (confirm('Recomeçar o jogo? Todas as carteiras voltam ao caixa inicial (os times continuam conectados).')) { drawerOpen = false; act('restart'); }
+        if (confirm('Recomeçar o jogo? Todas as carteiras voltam ao caixa inicial (os times continuam conectados).')) { closeDrawer(); act('restart'); }
         return;
       case 'exit':
-        drawerOpen = false; code = null; ss.set('jogo-code', null); S = null; login(password, true); return;
+        closeDrawer(); code = null; ss.set('jogo-code', null); S = null; login(password, true); return;
     }
   }
 
-  // teclado / passador de slides
+  // teclado / passador de slides (setas e Page Down sempre; espaço/Enter só fora de campos e botões)
   document.addEventListener('keydown', e => {
-    if (!S || e.target.closest('input, textarea')) return;
-    if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); onAction('primary'); }
+    if (!S || !shellReady || e.target.closest('input, textarea, .drawer')) return;
+    const always = ['ArrowRight', 'PageDown'].includes(e.key);
+    const soft = [' ', 'Enter'].includes(e.key) && !e.target.closest('button');
+    if (always || soft) { e.preventDefault(); onAction('primary'); }
   });
 
   // cronômetro

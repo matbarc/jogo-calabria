@@ -397,7 +397,16 @@ io.on('connection', socket => {
           }
         }
         if (m.rateOut != null) s.rateOut = Math.max(0, Number(m.rateOut) || 0);
-        if (m.decideSeconds != null) s.decideSeconds = Math.max(0, Math.min(600, Math.floor(Number(m.decideSeconds) || 0)));
+        if (m.decideSeconds != null) {
+          const sec = Math.max(0, Math.min(600, Math.floor(Number(m.decideSeconds) || 0)));
+          const changed = sec !== s.decideSeconds;
+          s.decideSeconds = sec;
+          // durante uma rodada, o novo tempo vale já: o cronômetro recomeça
+          if (changed && g.phase === 'decide') {
+            if (sec > 0) startTimer(g, sec);
+            else g.timer = { running: false, endsAt: null, remaining: null };
+          }
+        }
         return null;
       }
       case 'restart': {
