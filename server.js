@@ -181,31 +181,85 @@ function flush() {
 }
 
 // ---------------------------------------------------------------- persist
-let saveTimer = null;
-function scheduleSave() {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    try {
-      fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-      const out = [...games.values()].map(g => ({ ...g, teams: Object.fromEntries(Object.entries(g.teams).map(([k, t]) => [k, { ...t, sockets: [] }])) }));
-      fs.writeFileSync(DATA_FILE + '.tmp', JSON.stringify(out));
-      fs.renameSync(DATA_FILE + '.tmp', DATA_FILE);
-    } catch (e) { console.error('save failed', e.message); }
-  }, 500);
+// Com REDIS_URL (Key Value do Render), o jogo fica guardado fora do servidor e
+// sobrevive a reinícios e novas publicações. Sem ela, usa um arquivo local.
+const REDIS_URL = process.env.REDIS_URL || '';
+const REDIS_KEY = 'jogo:games';
+let redis = null;
+
+function serialize() {
+  const out = [...games.values()].map(g => ({ ...g, teams: Object.fromEntries(Object.entries(g.teams).map(([k, t]) => [k, { ...t, sockets: [] }])) }));
+  return JSON.stringify(out);
 }
-function load() {
+
+let saveTimer = null;
+let saving = null; // promessa da gravação em andamento
+let dirty = false;
+function scheduleSave() {
+  dirty = true;
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => { saveTimer = null; saveNow(); }, 300);
+}
+async function saveNow() {
+  if (saving) { await saving; if (!dirty) return; }
+  if (!dirty) return;
+  dirty = false;
+  const data = serialize();
+  saving = (async () => {
+    try {
+      if (redis) await redis.set(REDIS_KEY, data);
+      else {
+        fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+        fs.writeFileSync(DATA_FILE + '.tmp', data);
+        fs.renameSync(DATA_FILE + '.tmp', DATA_FILE);
+      }
+    } catch (e) { dirty = true; console.error('save failed', e.message); setTimeout(scheduleSave, 1000); }
+  })();
+  await saving;
+  saving = null;
+}
+
+async function load() {
+  let raw = null;
+  if (REDIS_URL) {
+    const { createClient } = require('redis');
+    redis = createClient({ url: REDIS_URL, socket: { reconnectStrategy: n => Math.min(n * 200, 3000) } });
+    redis.on('error', e => console.error('redis:', e.message));
+    try {
+      await redis.connect();
+      raw = await redis.get(REDIS_KEY);
+      console.log('usando Key Value para guardar os jogos');
+    } catch (e) {
+      console.error('Key Value indisponível, usando arquivo local:', e.message);
+      redis = null;
+    }
+  }
+  if (!redis) { try { raw = fs.readFileSync(DATA_FILE, 'utf8'); } catch { /* primeira vez */ } }
+  if (!raw) return;
   try {
-    const arr = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    for (const g of arr) {
+    for (const g of JSON.parse(raw)) {
       if (Date.now() - g.updatedAt > GAME_TTL_MS) continue;
       for (const t of Object.values(g.teams)) t.sockets = [];
-      if (g.timer.running) { g.timer.remaining = Math.max(0, g.timer.endsAt - Date.now()); g.timer.running = false; g.timer.endsAt = null; }
+      // cronômetro continua correndo: o reinício leva segundos
       games.set(g.code, g);
     }
     console.log(`loaded ${games.size} game(s)`);
-  } catch { /* first run */ }
+  } catch (e) { console.error('load failed', e.message); }
 }
+
+// Render manda SIGTERM antes de trocar a versão: grava o que falta e sai
+async function shutdown() {
+  try {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    dirty = true;
+    await saveNow();
+    if (redis) await redis.quit();
+  } catch (e) { console.error(e.message); }
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 setInterval(() => {
   for (const [code, g] of games) if (Date.now() - g.updatedAt > GAME_TTL_MS) games.delete(code);
 }, 3600 * 1000);
@@ -292,6 +346,15 @@ io.on('connection', socket => {
     t.sockets.push(socket.id);
     teamRef = { code: g.code, id: t.id };
     touch(g);
+  }
+
+  // celular que já estava no jogo se identifica na própria conexão,
+  // antes de reenviar cliques que ficaram pendentes durante a queda
+  {
+    const a = socket.handshake.auth || {};
+    const g = a.code && games.get(String(a.code));
+    const t = g && a.token && Object.values(g.teams).find(x => x.token === a.token);
+    if (t) attachTeam(g, t);
   }
 
   // -------- professor
@@ -488,8 +551,7 @@ io.on('connection', socket => {
   socket.on('disconnect', () => detachTeam());
 });
 
-load();
-server.listen(PORT, () => {
+load().then(() => server.listen(PORT, () => {
   console.log(`Jogo de Investimento rodando em http://localhost:${PORT}`);
   if (!process.env.TEACHER_PASSWORD) console.log('Senha do professor: "professor" (defina TEACHER_PASSWORD para mudar)');
-});
+}));

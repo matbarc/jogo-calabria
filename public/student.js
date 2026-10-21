@@ -1,11 +1,11 @@
 (function () {
   const { brl, signedBrl, pct, cls, esc, $ } = U;
   const app = $('#app');
-  const socket = io({ transports: ['websocket', 'polling'] });
-  U.connBadge(socket);
-
   const STORE = 'jogo-inv-team';
   const saved = () => { try { return JSON.parse(localStorage.getItem(STORE) || 'null'); } catch { return null; } };
+  const socket = io({ transports: ['websocket', 'polling'], auth: cb => cb(saved() || {}) });
+  U.connBadge(socket);
+
   const save = v => { try { v ? localStorage.setItem(STORE, JSON.stringify(v)) : localStorage.removeItem(STORE); } catch {} };
 
   let S = null; // último estado do servidor

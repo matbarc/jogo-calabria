@@ -23,6 +23,8 @@ Funciona como um Kahoot: o professor projeta a tela dele e os alunos entram pelo
 3. Quando ele pedir `TEACHER_PASSWORD`, escolha a senha do professor.
 4. Ao fim do deploy, o endereço fica parecido com `https://jogo-investimento.onrender.com`.
 
+**Para o jogo sobreviver a reinícios:** crie um Key Value gratuito no Render, na mesma região, e defina no serviço a variável `REDIS_URL` com o endereço interno dele (ex.: `redis://red-xxxx:6379`). Sem ela, o jogo fica num arquivo local, que o Render gratuito apaga a cada reinício.
+
 > **Importante:** no plano gratuito, o servidor "dorme" depois de 15 minutos sem uso, e a primeira visita leva cerca de 1 minuto para acordá-lo. **Abra a tela do professor uns 5 minutos antes da aula.** Durante o jogo não há esse problema, porque os celulares conectados o mantêm acordado.
 
 ## Plano B: rodar no notebook
